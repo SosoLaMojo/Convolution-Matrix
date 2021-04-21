@@ -1,7 +1,13 @@
 #include <stdio.h>
-#include <math.h>
 #include <stdlib.h>
-#include <cuda.h>
+#include <cuda_runtime.h>
+#include <device_launch_parameters.h>
+#include <iostream>
+
+#define STB_IMAGE_IMPLEMENTATION
+#include <stb_image.h>
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include <stb_image_write.h>
 
 #define pi 3.14159265359
 
@@ -39,38 +45,38 @@ void SaveImage(char *fname, int imgX, int imgY, float *img)
 	fclose(fp);
 }
 
-//__global__ void conv_img_gpu(float* img, float* kernel, float* imgf, int imgX, int imgY, int kernel_size)
-//{
-//	int threadId = threadIdx.x;
-//	int iy = blockIdx.x + (kernel_size - 1) / 2;
-//	int ix = threadIdx.x + (kernel_size - 1) / 2;
-//	int idx = iy * imgX + ix;
-//	int K2 = kernel_size * kernel_size;
-//	int center = (kernel_size - 1) / 2;
-//	int ii, jj;
-//	float sum = 0.0f;
-//
-//	extern __shared__ float sdata[];
-//
-//	if (tid < K2)
-//		sdata[tid] = kernel[tid];
-//
-//	__syncthreads();
-//
-//	if(idx<imgX*imgY)
-//	{
-//		for (int ki = 0; ki<kernel_size;ki++)
-//			for (int kj = 0; kj<kernel_size;kj++)
-//			{
-//				ii = kj + ix - center;
-//				jj = ki + iy - center;
-//				sum+=img[jj*imgX+ii] * sdata[ki*kernel_size + kj];
-//			}
-//		imgf[idx] = sum;
-//	}
-//}
+__global__ void conv_img_gpu(unsigned char* img, float* kernel, unsigned char* imgf, int imgX, int imgY, int kernel_size)
+{
+	int threadId = threadIdx.x;
+	int iy = blockIdx.x + (kernel_size - 1) / 2;
+	int ix = threadIdx.x + (kernel_size - 1) / 2;
+	int idx = iy * imgX + ix;
+	int K2 = kernel_size * kernel_size;
+	int center = (kernel_size - 1) / 2;
+	int ii, jj;
+	float sum = 0.0f;
 
-//int main()
-//{
-//	
-//}
+	extern __shared__ float sdata[];
+
+	if (threadId < K2)
+		sdata[threadId] = kernel[threadId];
+
+	__syncthreads();
+
+	if(idx<imgX*imgY)
+	{
+		for (int ki = 0; ki<kernel_size;ki++)
+			for (int kj = 0; kj<kernel_size;kj++)
+			{
+				ii = kj + ix - center;
+				jj = ki + iy - center;
+				sum+=img[jj*imgX+ii] * sdata[ki*kernel_size + kj];
+			}
+		imgf[idx] = (unsigned char)(sum);
+	}
+}
+
+int main()
+{
+	return 0;
+}
