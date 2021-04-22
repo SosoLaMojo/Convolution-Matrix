@@ -3,6 +3,8 @@
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
 #include <iostream>
+#include <filesystem>
+#include "kernels.h"
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
@@ -17,35 +19,17 @@ fname= filename (char)
 img = float vector containing the mage pixels
  */
 
-void LoadImage (char *fname, int imgX, int imgY, float *img)
+unsigned char* LoadImage (const std::string &path, int width, int height, int channelNumber)
 {
-	FILE* fp;
-	fp = fopen(fname, "r");
-
-	for (int i = 0; i < imgY; i++)
-	{
-		for (int j = 0; j < imgX; j++)
-			fscanf(fp, "%f ", &img[i * imgX + j]);
-		fscanf(fp, "\n");
-	}
-	fclose(fp);
+	return stbi_load(path.c_str(), &width, &height, &channelNumber, 0);
 }
 
-void SaveImage(char *fname, int imgX, int imgY, float *img)
+void WriteImage(const std::string& path, unsigned char* data, int width, int height, int channelNumber)
 {
-	FILE* fp;
-	fp = fopen(fname, "w");
-
-	for (int i = 0; i < imgY; i++)
-	{
-		for (int j = 0; j < imgX; j++)
-			fprintf(fp, "%10.3f ", img[i * imgX + j]);
-		fprintf(fp, "\n");
-	}
-	fclose(fp);
+	stbi_write_png(path.c_str(), width, height, channelNumber, data, channelNumber * width);
 }
 
-__global__ void conv_img_gpu(unsigned char* img, float* kernel, unsigned char* imgf, int imgX, int imgY, int kernel_size)
+__global__ void conv_img_gpu(unsigned char* img, int* kernel, unsigned char* imgf, int imgX, int imgY, int kernel_size)
 {
 	int threadId = threadIdx.x;
 	int iy = blockIdx.x + (kernel_size - 1) / 2;
@@ -78,5 +62,130 @@ __global__ void conv_img_gpu(unsigned char* img, float* kernel, unsigned char* i
 
 int main()
 {
+	cudaEvent_t start;
+	cudaEvent_t stop;
+
+	cudaEventCreate(&start);
+	cudaEventCreate(&stop);
+
+	float milliseconds = 0;
+	int Nx = 512;
+	int Ny = 512;
+	int Nkernel = 0;
+	int kernelSize = 0;
+	int* kernel;
+
+	std::cin >> Nkernel;
+	
+	switch (Nkernel)
+	{
+	case 0:
+		kernel = kIdentity;
+		kernelSize = 3;
+		break;
+
+	case 1:
+		kernel = kBlur1;
+		kernelSize = 5;
+		break;
+		
+	case 2:
+		kernel = kBlur2;
+		kernelSize = 5;
+		break;
+		
+	case 3:
+		kernel = kMotionBlur;
+		kernelSize = 9;
+		break;
+		
+	case 4:
+		kernel = kEdgesDetect;
+		kernelSize = 3;
+		break;
+		
+	case 5:
+		kernel = kEdgesEnhance;
+		kernelSize = 3;
+		break;
+		
+	case 6:
+		kernel = kHorizontalEdges;
+		kernelSize = 5;
+		break;
+		
+	case 7:
+		kernel = kVerticalEdges;
+		kernelSize = 5;
+		break;
+		
+	case 8:
+		kernel = kAllEdges;
+		kernelSize = 3;
+		break;
+		
+	case 9:
+		kernel = kSharpen;
+		kernelSize = 3;
+		break;
+		
+	case 10:
+		kernel = kSuperSharpen;
+		kernelSize = 3;
+		break;
+		
+	case 11:
+		kernel = kEmboss;
+		kernelSize = 3;
+		break;
+		
+	case 12:
+		kernel = kBoxFilter;
+		kernelSize = 19;
+		break;
+		
+	case 13:
+		kernel = kGaussianBlur;
+		kernelSize = 5;
+		break;
+	}
+
+	unsigned char* img = (unsigned char*)malloc(Nx * Ny * sizeof(unsigned char));
+	unsigned char* imgf = (unsigned char*)malloc(Nx * Ny * sizeof(unsigned char));
+
+	unsigned char* d_img;
+	unsigned char* d_imgf;
+	int* d_kernel;
+
+	cudaMalloc(&d_img, Nx * Ny * sizeof(unsigned char));
+	cudaMalloc(&d_imgf, Nx * Ny * sizeof(unsigned char));
+	cudaMalloc(&d_kernel, kernelSize * kernelSize * sizeof(int));
+
+	img = LoadImage("../data/lena.png", Nx, Ny, 0);
+
+	cudaMemcpy(d_img, img, Nx * Ny * sizeof(unsigned char), cudaMemcpyHostToDevice);
+	cudaMemcpy(d_kernel, kernel, kernelSize * kernelSize * sizeof(int), cudaMemcpyHostToDevice);
+
+	int Nblocks = Ny - (kernelSize - 1);
+	int Nthreads = Nx - (kernelSize - 1);
+
+	cudaEventRecord(start);
+	conv_img_gpu <<< Nblocks, Nthreads, kernelSize* kernelSize * sizeof(int) >>> (d_img, d_kernel, d_imgf, Nx, Ny, kernelSize);
+	cudaDeviceSynchronize();
+	cudaEventRecord(stop);
+	cudaEventElapsedTime(&milliseconds, start, stop);
+
+	cudaMemcpy(imgf, d_imgf, Nx * Ny * sizeof(unsigned char), cudaMemcpyDeviceToHost);
+	WriteImage("../data/lena2.png", imgf, 512, 512, 0);
+
+	std::cout << "Convolution complete. Elapsed time (GPU): " << milliseconds << std::endl;
+
+	free(img);
+	free(imgf);
+
+	cudaFree(d_img);
+	cudaFree(d_imgf);
+	cudaFree(d_kernel);
+	
 	return 0;
 }
