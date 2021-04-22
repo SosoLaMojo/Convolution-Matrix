@@ -26,37 +26,46 @@ unsigned char* LoadImage (const std::string &path, int width, int height, int ch
 
 void WriteImage(const std::string& path, unsigned char* data, int width, int height, int channelNumber)
 {
-	stbi_write_png(path.c_str(), width, height, channelNumber, data, channelNumber * width);
+	stbi_write_bmp(path.c_str(), width, height, channelNumber, data);
 }
 
-__global__ void conv_img_gpu(unsigned char* img, int* kernel, unsigned char* imgf, int imgX, int imgY, int kernel_size)
+__global__ void conv_img_gpu(unsigned char* img, float* kernel, unsigned char* imgf, std::size_t imgX, std::size_t imgY, int kernel_size)
 {
-	int threadId = threadIdx.x;
-	int iy = blockIdx.x + (kernel_size - 1) / 2;
-	int ix = threadIdx.x + (kernel_size - 1) / 2;
-	int idx = iy * imgX + ix;
-	int K2 = kernel_size * kernel_size;
+	//int iy = blockIdx.x + (kernel_size - 1) / 2;
+	//int ix = threadIdx.x + (kernel_size - 1) / 2;
+	std::size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
 	int center = (kernel_size - 1) / 2;
-	int ii, jj;
-	float sum = 0.0f;
+	int stride = blockDim.x * gridDim.x;
 
-	extern __shared__ float sdata[];
-
-	if (threadId < K2)
-		sdata[threadId] = kernel[threadId];
-
-	__syncthreads();
-
-	if(idx<imgX*imgY)
+	for (std::size_t px = idx; px < imgX * imgY; px += stride)
 	{
-		for (int ki = 0; ki<kernel_size;ki++)
-			for (int kj = 0; kj<kernel_size;kj++)
+		float sum[3] = { 0.0f, 0.0f, 0.0f };
+		
+		const std::size_t x = px % imgX;
+		const std::size_t y = px / imgX;
+		for (int ki = 0; ki < kernel_size; ki++)
+		{
+			for (int kj = 0; kj < kernel_size; kj++)
 			{
-				ii = kj + ix - center;
-				jj = ki + iy - center;
-				sum+=img[jj*imgX+ii] * sdata[ki*kernel_size + kj];
+				std::size_t ii = ki + x - center;
+				std::size_t jj = kj + y - center;
+				std::size_t kdx = (jj * imgX + ii) * 3;
+				if (kdx > imgX * imgY * 3)
+					continue;
+				
+				for (int color = 0; color < 3; ++color)
+				{
+					float image = ((float)img[kdx + color]) / 255.0f;
+					sum[color] +=  image * kernel[ki * kernel_size + kj];
+				}
 			}
-		imgf[idx] = (unsigned char)(sum);
+		}
+
+		for (int color = 0; color < 3; ++color)
+		{
+			sum[color] = sum[color] < 0.0f ? 0.0f : sum[color] > 1.0f ? 1.0f : sum[color];
+			imgf[px * 3 + color] = (unsigned char)(sum[color] * 255.0f);
+		}
 	}
 }
 
@@ -69,11 +78,11 @@ int main()
 	cudaEventCreate(&stop);
 
 	float milliseconds = 0;
-	int Nx = 512;
-	int Ny = 512;
+	std::size_t Nx = 512;
+	std::size_t Ny = 512;
 	int Nkernel = 0;
 	int kernelSize = 0;
-	int* kernel;
+	float* kernel;
 
 	std::cin >> Nkernel;
 	
@@ -150,33 +159,34 @@ int main()
 		break;
 	}
 
-	unsigned char* img = (unsigned char*)malloc(Nx * Ny * sizeof(unsigned char));
-	unsigned char* imgf = (unsigned char*)malloc(Nx * Ny * sizeof(unsigned char));
+	unsigned char* img;
+	unsigned char* imgf = (unsigned char*)malloc(Nx * Ny * 3 * sizeof(unsigned char));
 
 	unsigned char* d_img;
 	unsigned char* d_imgf;
-	int* d_kernel;
+	float* d_kernel;
 
-	cudaMalloc(&d_img, Nx * Ny * sizeof(unsigned char));
-	cudaMalloc(&d_imgf, Nx * Ny * sizeof(unsigned char));
-	cudaMalloc(&d_kernel, kernelSize * kernelSize * sizeof(int));
+	cudaMalloc(&d_img, Nx * Ny * 3 * sizeof(unsigned char));
+	cudaMalloc(&d_imgf, Nx * Ny * 3 * sizeof(unsigned char));
+	cudaMalloc(&d_kernel, kernelSize * kernelSize * sizeof(float));
 
-	img = LoadImage("../data/lena.png", Nx, Ny, 0);
+	img = LoadImage("../data/lena.png", Nx, Ny, 3);
 
-	cudaMemcpy(d_img, img, Nx * Ny * sizeof(unsigned char), cudaMemcpyHostToDevice);
-	cudaMemcpy(d_kernel, kernel, kernelSize * kernelSize * sizeof(int), cudaMemcpyHostToDevice);
+	cudaMemcpy(d_img, img, Nx * Ny * 3 * sizeof(unsigned char), cudaMemcpyHostToDevice);
+	cudaMemcpy(d_kernel, kernel, kernelSize * kernelSize * sizeof(float), cudaMemcpyHostToDevice);
 
-	int Nblocks = Ny - (kernelSize - 1);
-	int Nthreads = Nx - (kernelSize - 1);
+	int Nthreads = 256;
+	int Nblocks = (Nx * Ny + Nthreads - 1) / Nthreads;
 
 	cudaEventRecord(start);
-	conv_img_gpu <<< Nblocks, Nthreads, kernelSize* kernelSize * sizeof(int) >>> (d_img, d_kernel, d_imgf, Nx, Ny, kernelSize);
+	conv_img_gpu <<< Nblocks, Nthreads>>> (d_img, d_kernel, d_imgf, Nx, Ny, kernelSize);
 	cudaDeviceSynchronize();
 	cudaEventRecord(stop);
 	cudaEventElapsedTime(&milliseconds, start, stop);
 
-	cudaMemcpy(imgf, d_imgf, Nx * Ny * sizeof(unsigned char), cudaMemcpyDeviceToHost);
-	WriteImage("../data/lena2.png", imgf, 512, 512, 0);
+	cudaMemcpy(imgf, d_imgf, Nx * Ny * 3 * sizeof(unsigned char), cudaMemcpyDeviceToHost);
+	
+	WriteImage("../data/lena2.bmp", imgf, Nx, Ny, 3);
 
 	std::cout << "Convolution complete. Elapsed time (GPU): " << milliseconds << std::endl;
 
