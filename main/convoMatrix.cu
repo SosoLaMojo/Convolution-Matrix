@@ -71,12 +71,6 @@ __global__ void conv_img_gpu(unsigned char* img, float* kernel, unsigned char* i
 
 int main()
 {
-	cudaEvent_t start;
-	cudaEvent_t stop;
-
-	cudaEventCreate(&start);
-	cudaEventCreate(&stop);
-
 	float milliseconds = 0;
 	std::size_t Nx = 512;
 	std::size_t Ny = 512;
@@ -84,6 +78,10 @@ int main()
 	int kernelSize = 0;
 	float* kernel;
 
+	std::cout << "Choose a kernel:\n 0 = Identity\n 1 = Blur type 1\n 2 = Blur type 2\n 3 = Motion Blur\n 4 = Edges Detection\n"
+		<< "5 = Edges Enhance\n 6 = Horizontal Edges\n 7 = Vertical Edges\n 8 = All Edges\n 9 = Sharpen\n 10 = Super Sharpen\n"
+		<< "11 = Emboss\n 12 = Box Filter\n 13 = Gaussian Blur\n" << std::endl;
+	
 	std::cin >> Nkernel;
 	
 	switch (Nkernel)
@@ -157,6 +155,11 @@ int main()
 		kernel = kGaussianBlur;
 		kernelSize = 5;
 		break;
+
+	default:
+		kernel = kIdentity;
+		kernelSize = 3;
+		break;
 	}
 
 	unsigned char* img;
@@ -178,17 +181,17 @@ int main()
 	int Nthreads = 256;
 	int Nblocks = (Nx * Ny + Nthreads - 1) / Nthreads;
 
-	cudaEventRecord(start);
+	auto start = std::chrono::high_resolution_clock::now();
 	conv_img_gpu <<< Nblocks, Nthreads>>> (d_img, d_kernel, d_imgf, Nx, Ny, kernelSize);
 	cudaDeviceSynchronize();
-	cudaEventRecord(stop);
-	cudaEventElapsedTime(&milliseconds, start, stop);
+	auto stop = std::chrono::high_resolution_clock::now();
+	auto duration = std::chrono::duration_cast<std::chrono::microseconds>(stop - start);
 
 	cudaMemcpy(imgf, d_imgf, Nx * Ny * 3 * sizeof(unsigned char), cudaMemcpyDeviceToHost);
 	
 	WriteImage("../data/lena2.bmp", imgf, Nx, Ny, 3);
 
-	std::cout << "Convolution complete. Elapsed time (GPU): " << milliseconds << std::endl;
+	std::cout << "Convolution complete. Elapsed time (GPU): " << duration.count() << std::endl;
 
 	free(img);
 	free(imgf);
